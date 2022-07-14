@@ -1,0 +1,40 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require 'optparse'
+# require "dry/cli"
+require_relative '../lib/miniwallet'
+# Dry::CLI.new(MiniWallet::CLI::Commands).call
+# require_relative '../config/env'
+
+subtext = <<~HELP
+  Commonly used command are:
+     send AMOUNT TO_ADDR - send Amount of BTC to bitcoin address (TO_ADDR)
+     balance             - display wallet balance
+HELP
+
+global = OptionParser.new do |opts|
+  opts.banner = "Usage: #{$PROGRAM_NAME} [options] command [cmdoptions]"
+  opts.on('-h', '--help', 'Display this help') do
+    puts opts
+  end
+  opts.separator ''
+  opts.separator subtext
+end
+
+subcommands = {
+  'send' => OptionParser.new do |opts|
+    opts.on do
+      puts "S #{ARGV}"
+    end
+  end,
+  'balance' => OptionParser.new do |opts|
+    opts.on do
+      MiniWallet.balance
+    end
+  end
+}
+
+global.parse! ['-h']
+command = ARGV.shift
+subcommands[command].order! if command
