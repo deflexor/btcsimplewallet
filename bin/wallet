@@ -2,6 +2,7 @@
 # frozen_string_literal: true
 
 require 'optparse'
+require 'bundler/setup'
 require_relative '../lib/miniwallet'
 
 subtext = <<~HELP
@@ -25,7 +26,7 @@ subcommands = {
       begin
         raise "Wrong number of arguments to send!" if ARGV.size != 2
         res = MiniWallet.send(*ARGV)
-        puts "Transaction posted successfully! #{res}"
+        puts "Transaction posted successfully! txid:#{res}"
       rescue => e
         puts "Send failed:"
         puts e

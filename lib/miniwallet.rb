@@ -3,6 +3,7 @@
 require 'json'
 require 'ostruct'
 require 'logger'
+require 'stringio'
 require 'faraday'
 require 'faraday/net_http'
 Faraday.default_adapter = :net_http
@@ -11,7 +12,6 @@ Bitcoin.network = :testnet
 require_relative './miniwallet/keyhelper'
 
 module MiniWallet
-  include Bitcoin::Builder
 
   module Config
     class << self
@@ -37,10 +37,10 @@ module MiniWallet
 
   def self.balance
     key = KeyHelper.ensure_key
-    response = Faraday.get("#{Config.api_url}/address/#{key.addr}")
-    obj = JSON.parse(response.body, object_class: OpenStruct)
-    puts obj.chain_stats.funded_txo_sum
-    RespBalance.new(key.addr, obj.chain_stats.funded_txo_sum)
+    response = Faraday.get("#{Config.api_url}/address/#{key.addr}/utxo")
+    inputs_obj = JSON.parse(response.body, object_class: OpenStruct)
+    bal = inputs_obj.map(&:value).map(&:to_i).inject(:+) || 0
+    RespBalance.new(key.addr, bal)
   end
 
   def self.send(amount, to)
@@ -50,60 +50,41 @@ module MiniWallet
     key = KeyHelper.ensure_key
     response = Faraday.get("#{Config.api_url}/address/#{key.addr}/utxo")
     inputs_obj = JSON.parse(response.body, object_class: OpenStruct)
-    puts response.body
     tx = new_tx(key, inputs_obj, to, amount * Config.satoshi, Config.tx_fee)
-    response = send_tx tx
-    puts response.status
-    puts response.body
-    RespSent.new(key.addr, 0)
+    send_tx tx
   end
 
   def self.send_tx tx
-    conn = Faraday.new(
-      url: Config.api_url,
-      headers: { 'Content-Type' => 'application/json' }
-    )
-    conn.post('/tx') do |req|
-      req.body = tx.to_json
+    conn = Faraday.new(url: Config.api_url, headers: {'Content-Type' => 'text/plain'})
+    resp = conn.post('/testnet/api/tx') do |req|
+      req.body = tx.to_payload.unpack('H*')[0]
+    end
+    if resp.status != 200
+      raise "Sending tx failed: #{resp.status} #{resp.headers} #{resp.body}"
+    else
+      resp.body
     end
   end
 
   # inputs are
-  # [{txid, status: { value=satoshis, ... }}, ... ]
+  # [{txid, value=satoshis }, ... ]
   def self.new_tx(key, inputs, o_addr, o_value, fee = 0)
-    input_values = inputs.map(&:value).map(&:to_i)
-    puts "Z"
-    puts input_values
     input_value = inputs.map(&:value).map(&:to_i).inject(:+) || 0
-    puts "input_val #{input_value} > #{o_value.to_i + fee}"
-    raise "Insufficient funds"  unless input_value >= (o_value.to_i + fee)
-    include Bitcoin::Builder
-    build_tx do |t|
-      t.output do |o|
-        o.value value
-        o.script do |s|
-          s.recipient o_addr
-        end
-      end
+    raise "Insufficien  t funds"  unless input_value >= (o_value.to_i + fee)
+    tx = Bitcoin::Protocol::Tx.new
+    tx.add_out Bitcoin::Protocol::TxOut.value_to_address(o_value.to_i, o_addr)
+    change_value = input_value - o_value.to_i - fee
+    tx.add_out Bitcoin::Protocol::TxOut.value_to_address(change_value, key.addr) if change_value > 0
 
-      change_value = input_value - o_value - fee
-      if change_value > 0
-        t.output do |o|
-          o.value change_value
-          o.script do |s|
-            s.recipient key.addr
-          end
-        end
-      end
-
-      inputs.each_with_index do |prev_out, idx|
-        t.input do |i|
-          prev_tx = prev_out.txid
-          i.prev_out prev_tx
-          i.prev_out_index idx
-          i.signature_key key
-        end
-      end
-    end # build tx
+    inputs.each_with_index do |prev_out, idx|
+      prev_tx_bin = Faraday.get("#{Config.api_url}/tx/#{prev_out.txid}/raw").body
+      prev_tx = Bitcoin::Protocol::Tx.new(prev_tx_bin)
+      tx.add_in Bitcoin::Protocol::TxIn.new(prev_tx.binary_hash, idx, 0)
+      # signing inputs.
+      sig = key.sign(tx.signature_hash_for_input(0, prev_tx))
+      tx.in[idx].add_signature_pubkey_script(sig, key.pub)
+    end
+    tx
   end
+
 end
