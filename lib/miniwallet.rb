@@ -56,6 +56,8 @@ module MiniWallet
 
   def self.send_tx tx
     conn = Faraday.new(url: Config.api_url, headers: {'Content-Type' => 'text/plain'})
+    #conn = Faraday.new(url: 'https://blockchain.info', headers: {'Content-Type' => 'text/plain'})
+    #resp = conn.post('/pushtx') do |req|
     resp = conn.post('/testnet/api/tx') do |req|
       req.body = tx.to_payload.unpack('H*')[0]
     end
@@ -72,10 +74,6 @@ module MiniWallet
     input_value = inputs.map(&:value).map(&:to_i).inject(:+) || 0
     raise "Insufficien  t funds"  unless input_value >= (o_value.to_i + fee)
     tx = Bitcoin::Protocol::Tx.new
-    tx.add_out Bitcoin::Protocol::TxOut.value_to_address(o_value.to_i, o_addr)
-    change_value = input_value - o_value.to_i - fee
-    tx.add_out Bitcoin::Protocol::TxOut.value_to_address(change_value, key.addr) if change_value > 0
-
     inputs.each_with_index do |prev_out, idx|
       prev_tx_bin = Faraday.get("#{Config.api_url}/tx/#{prev_out.txid}/raw").body
       prev_tx = Bitcoin::Protocol::Tx.new(prev_tx_bin)
@@ -84,6 +82,11 @@ module MiniWallet
       sig = key.sign(tx.signature_hash_for_input(0, prev_tx))
       tx.in[idx].add_signature_pubkey_script(sig, key.pub)
     end
+
+    tx.add_out Bitcoin::Protocol::TxOut.value_to_address(o_value.to_i, o_addr)
+    change_value = input_value - o_value.to_i - fee
+    tx.add_out Bitcoin::Protocol::TxOut.value_to_address(change_value, key.addr) if change_value > 0
+
     tx
   end
 
